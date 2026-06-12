@@ -4,12 +4,21 @@
 # Source this file from your shell rc (the installer does this for you):
 #   source /path/to/claude-session-picker/shell/ccr.sh
 #
-# Then run `ccr` (optionally with a query: `ccr proxy oz`) to fuzzy-pick any
-# Claude Code session across all directories and resume it in its original cwd.
+# Usage:
+#   ccr                fuzzy-pick an active session and resume it in its cwd
+#   ccr <query>        same, with the picker pre-filtered by <query>
+#   ccr -a | --all     start in "show all" mode (includes excluded sessions)
+#
+# In the picker:
+#   type        fuzzy-filter across title + directory + branch
+#   ctrl-x      toggle exclude on the highlighted session (hide / un-hide)
+#   ctrl-a      toggle between active view and show-all (excluded marked ✕)
+#   enter       resume the session in its original directory
 #
 # Overrides:
 #   CCR_HELPER           path to claude-sessions.py (default: ../bin relative to this file)
-#   CLAUDE_PROJECTS_DIR  transcript root (default: ~/.claude/projects), read by the helper
+#   CLAUDE_PROJECTS_DIR  transcript root (default: ~/.claude/projects)
+#   CCR_CONFIG_DIR       exclusion config dir (default: ~/.config/ccr)
 
 # Resolve the directory of THIS file, whether sourced from bash or zsh.
 if [ -n "${ZSH_VERSION:-}" ]; then
@@ -21,6 +30,7 @@ _ccr_root="$(cd "$(dirname "$_ccr_self")/.." >/dev/null 2>&1 && pwd)"
 unset _ccr_self
 
 : "${CCR_HELPER:=$_ccr_root/bin/claude-sessions.py}"
+export CCR_HELPER   # exported so fzf's bind/preview subshells can reference it
 unset _ccr_root
 
 ccr() {
@@ -33,14 +43,31 @@ ccr() {
     return 1
   fi
 
+  # -a/--all starts in "show everything (incl. excluded)" mode.
+  local all=0
+  case "${1:-}" in
+    -a|--all) all=1; shift ;;
+  esac
+
+  local prompt
+  local -a feed
+  if [ "$all" -eq 1 ]; then
+    prompt='all> '; feed=(--list --all)
+  else
+    prompt='session> '; feed=(--list)
+  fi
+
   local sel sid cwd
-  sel=$(python3 "$CCR_HELPER" --list | fzf \
+  sel=$(python3 "$CCR_HELPER" "${feed[@]}" | fzf \
     --delimiter='\t' --with-nth=4 \
     --no-sort --reverse --height=85% \
-    --prompt='session> ' \
+    --prompt="$prompt" \
     --query="$*" \
-    --preview="python3 '$CCR_HELPER' --preview {3}" \
-    --preview-window='right:52%:wrap') || return
+    --header='ctrl-x: hide/unhide   ctrl-a: all/active   enter: resume' \
+    --preview="python3 \"\$CCR_HELPER\" --preview {3}" \
+    --preview-window='right:52%:wrap' \
+    --bind="ctrl-x:execute-silent(python3 \"\$CCR_HELPER\" --toggle-exclude {1})+transform:[ \"\$FZF_PROMPT\" = 'all> ' ] && echo 'reload(python3 \"\$CCR_HELPER\" --list --all)' || echo 'reload(python3 \"\$CCR_HELPER\" --list)'" \
+    --bind="ctrl-a:transform:[ \"\$FZF_PROMPT\" = 'all> ' ] && echo 'change-prompt(session> )+reload(python3 \"\$CCR_HELPER\" --list)' || echo 'change-prompt(all> )+reload(python3 \"\$CCR_HELPER\" --list --all)'") || return
   [ -z "$sel" ] && return
 
   sid=$(printf '%s' "$sel" | cut -f1)

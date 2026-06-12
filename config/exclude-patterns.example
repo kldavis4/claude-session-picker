@@ -1,0 +1,11 @@
+# ccr exclude-patterns — copy to ~/.config/ccr/exclude-patterns and edit.
+#
+# One pattern per line. Each is a case-insensitive SUBSTRING matched against a
+# session's title and its first prompt. Any session that matches is hidden from
+# `ccr` by default (use `ccr -a` or ctrl-a in the picker to see hidden ones).
+#
+# Blank lines and lines starting with # are ignored.
+#
+# Examples:
+# Generate a diary entry for
+# You are an elite PR reviewer

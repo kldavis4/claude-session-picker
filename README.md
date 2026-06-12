@@ -79,8 +79,9 @@ If `fzf` is missing:
 ## Usage
 
 ```sh
-ccr                # browse all sessions, newest first
+ccr                # browse active sessions, newest first
 ccr proxy oz       # open the picker pre-filtered by a query
+ccr -a             # start in show-all mode (includes excluded sessions)
 ```
 
 Inside the picker:
@@ -89,7 +90,31 @@ Inside the picker:
 - **↑/↓** to move; the right pane previews the session's opening prompts.
 - **Enter** to resume — `ccr` `cd`s into the session's original directory and
   runs `claude --resume <id>`.
+- **Ctrl-X** to hide the highlighted session (toggles — press again to un-hide).
+- **Ctrl-A** to toggle between the active view and show-all (hidden sessions
+  appear marked with `✕`).
 - **Esc** to cancel.
+
+## Excluding noisy sessions
+
+Automated or repetitive sessions (cron jobs, scripted prompts) clutter the list.
+Two ways to hide them, both stored under `~/.config/ccr/`:
+
+- **Per session** — highlight it and press **Ctrl-X**. The session id is added
+  to `~/.config/ccr/excluded`. Press Ctrl-X again on it (in show-all view) to
+  un-hide.
+- **By pattern** — add lines to `~/.config/ccr/exclude-patterns`. Each line is a
+  **case-insensitive substring** matched against a session's title and first
+  prompt; any match is hidden. For example:
+
+  ```
+  Generate a diary entry for
+  You are an elite PR reviewer
+  ```
+
+  See [`config/exclude-patterns.example`](config/exclude-patterns.example).
+
+Hidden sessions are never deleted — `ccr -a` or Ctrl-A always brings them back.
 
 ## How it works
 
@@ -110,6 +135,7 @@ Both are optional environment variables:
 | --------------------- | ---------------------- | -------------------------------------------- |
 | `CLAUDE_PROJECTS_DIR` | `~/.claude/projects`   | Where transcripts live (override for tests). |
 | `CCR_HELPER`          | `<repo>/bin/...py`     | Path to the helper if you relocate it.       |
+| `CCR_CONFIG_DIR`      | `~/.config/ccr`        | Exclusion files (`excluded`, `exclude-patterns`); honors `XDG_CONFIG_HOME`. |
 
 ## Uninstall
 

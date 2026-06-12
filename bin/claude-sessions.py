@@ -9,13 +9,22 @@ Transcript location defaults to ~/.claude/projects but can be overridden with
 the CLAUDE_PROJECTS_DIR environment variable (useful for tests or non-standard
 installs).
 
+Exclusions (so the list stays signal, not noise) live under the config dir
+(~/.config/ccr, or $CCR_CONFIG_DIR / $XDG_CONFIG_HOME):
+  excluded           tool-managed list of session IDs hidden via `ctrl-x`
+  exclude-patterns   user-editable list of case-insensitive substrings; any
+                     session whose title or first prompt contains one is hidden
+A session is hidden by default if its id is in `excluded` OR it matches a
+pattern. `--all` shows everything, marking hidden rows with a leading ✕.
+
 Modes:
-  --list             one row per transcript (newest first), tab-separated:
+  --list [--all]     one row per transcript (newest first), tab-separated:
                        sessionId \\t cwd \\t transcript_path \\t display_string
                      Only field 4 (display) is meant to be shown/searched in
                      fzf; fields 1-3 are machine-readable payload.
-  --preview <path>   print a human-readable summary of one transcript for the
-                     fzf preview pane: title, dir, branch, and opening prompts.
+  --preview <path>   print a human-readable summary of one transcript.
+  --toggle-exclude <sessionId>
+                     add the id to `excluded`, or remove it if already present.
 """
 import os
 import sys
@@ -25,6 +34,31 @@ import time
 
 ROOT = os.environ.get("CLAUDE_PROJECTS_DIR") or os.path.expanduser("~/.claude/projects")
 HOME = os.path.expanduser("~")
+
+CONFIG_DIR = (os.environ.get("CCR_CONFIG_DIR")
+              or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "ccr"))
+EXCLUDED_FILE = os.path.join(CONFIG_DIR, "excluded")
+PATTERNS_FILE = os.path.join(CONFIG_DIR, "exclude-patterns")
+
+
+def _read_lines(path):
+    """Yield stripped, non-blank, non-comment lines from a config file."""
+    try:
+        with open(path, errors="replace") as fh:
+            for line in fh:
+                s = line.strip()
+                if s and not s.startswith("#"):
+                    yield s
+    except OSError:
+        return
+
+
+def load_excluded():
+    return set(_read_lines(EXCLUDED_FILE))
+
+
+def load_patterns():
+    return [s.lower() for s in _read_lines(PATTERNS_FILE)]
 
 
 def _text_from_user(d):
@@ -83,6 +117,18 @@ def scan(path, max_prompts=4):
             "branch": branch or "", "prompts": prompts}
 
 
+def exclusion_reason(info, excluded, patterns):
+    """Return 'id', 'pattern', or None for why a session is hidden by default."""
+    if info["sid"] in excluded:
+        return "id"
+    if patterns:
+        hay = ((info["title"] or "") + " " + " ".join(info["prompts"])).lower()
+        for p in patterns:
+            if p in hay:
+                return "pattern"
+    return None
+
+
 def human_age(secs):
     s = int(secs)
     if s < 3600:
@@ -96,8 +142,11 @@ def short(p):
     return p.replace(HOME, "~", 1) if p.startswith(HOME) else p
 
 
-def list_mode():
+def list_mode(show_all=False):
     now = time.time()
+    excluded = load_excluded()
+    patterns = load_patterns()
+
     rows = []
     for p in glob.glob(os.path.join(ROOT, "*", "*.jsonl")):
         try:
@@ -112,13 +161,18 @@ def list_mode():
         # Skip unreadable transcripts and sessions with no real user turn.
         if not info or (info["cwd"] == "?" and not info["prompts"]):
             continue
+        reason = exclusion_reason(info, excluded, patterns)
+        if reason and not show_all:
+            continue
         label = info["title"] or (info["prompts"][0] if info["prompts"] else "(empty session)")
         label = label[:90]
         br = ""
         if info["branch"] and info["branch"] not in ("HEAD", "main", "master", ""):
             br = f"  [{info['branch']}]"
         age = human_age(now - mt)
-        display = f"{age:>4}  {label}  —  {short(info['cwd'])}{br}"
+        # In --all view, prefix hidden rows so they're visible and un-hideable.
+        mark = ("✕ " if reason else "  ") if show_all else ""
+        display = f"{mark}{age:>4}  {label}  —  {short(info['cwd'])}{br}"
         out.append("\t".join([info["sid"], info["cwd"], p, display]))
     sys.stdout.write("\n".join(out) + ("\n" if out else ""))
 
@@ -128,10 +182,15 @@ def preview_mode(path):
     if not info:
         print("(unreadable transcript)")
         return
+    reason = exclusion_reason(info, load_excluded(), load_patterns())
     print(f"TITLE   {info['title'] or '(none)'}")
     print(f"DIR     {short(info['cwd'])}")
     if info["branch"] and info["branch"] != "HEAD":
         print(f"BRANCH  {info['branch']}")
+    if reason == "id":
+        print("EXCLUDED  yes (this session — ctrl-x to un-hide)")
+    elif reason == "pattern":
+        print("EXCLUDED  yes (matches an exclude-pattern)")
     print()
     if not info["prompts"]:
         print("(no user prompts)")
@@ -141,13 +200,29 @@ def preview_mode(path):
         print()
 
 
-def main():
-    if len(sys.argv) >= 2 and sys.argv[1] == "--list":
-        list_mode()
-    elif len(sys.argv) >= 3 and sys.argv[1] == "--preview":
-        preview_mode(sys.argv[2])
+def toggle_exclude(sid):
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    cur = load_excluded()
+    if sid in cur:
+        cur.discard(sid)
     else:
-        sys.stderr.write("usage: claude-sessions.py --list | --preview <transcript>\n")
+        cur.add(sid)
+    with open(EXCLUDED_FILE, "w") as fh:
+        fh.write("\n".join(sorted(cur)) + ("\n" if cur else ""))
+
+
+def main():
+    argv = sys.argv
+    if len(argv) >= 2 and argv[1] == "--list":
+        list_mode(show_all="--all" in argv[2:])
+    elif len(argv) >= 3 and argv[1] == "--preview":
+        preview_mode(argv[2])
+    elif len(argv) >= 3 and argv[1] == "--toggle-exclude":
+        toggle_exclude(argv[2])
+    else:
+        sys.stderr.write(
+            "usage: claude-sessions.py --list [--all] | --preview <transcript> "
+            "| --toggle-exclude <sessionId>\n")
         sys.exit(2)
 
 
