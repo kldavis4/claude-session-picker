@@ -52,7 +52,7 @@ you can close sessions freely without any "context dump" ritual.
 ## Install
 
 ```sh
-git clone <your-fork-url> ~/projects/claude-session-picker
+git clone https://github.com/kldavis4/claude-session-picker.git ~/projects/claude-session-picker
 cd ~/projects/claude-session-picker
 ./install.sh
 ```
