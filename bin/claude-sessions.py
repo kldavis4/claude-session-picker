@@ -67,8 +67,14 @@ def load_patterns():
     return [s.lower() for s in _read_lines(PATTERNS_FILE)]
 
 
+def _cmd_is_claude(cmd):
+    """True if a command line is a `claude` CLI invocation — not a path arg that
+    merely mentions ~/.claude, the Python helper, or the desktop app."""
+    return any(os.path.basename(tok) == "claude" for tok in cmd.split())
+
+
 def _live_claude_pids():
-    """PIDs of all running `claude` processes (one ps call)."""
+    """PIDs of all running `claude` CLI processes (one ps call)."""
     try:
         r = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True)
     except Exception:
@@ -76,12 +82,45 @@ def _live_claude_pids():
     pids = set()
     for line in r.stdout.splitlines():
         parts = line.split(None, 1)
-        if len(parts) == 2 and "claude" in parts[1]:
+        if len(parts) == 2 and _cmd_is_claude(parts[1]):
             try:
                 pids.add(int(parts[0]))
             except ValueError:
                 pass
     return pids
+
+
+def _pid_is_claude(pid):
+    """Cheap single-PID liveness + identity check (one targeted ps)."""
+    if not pid:
+        return False
+    try:
+        r = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True)
+    except Exception:
+        return False
+    return _cmd_is_claude(r.stdout.strip())
+
+
+def open_entry_for(sid):
+    """Registry entry {pid,name,status} for one session id, or None.
+
+    Reads the small session json files and validates only that session's PID,
+    avoiding a full process scan — used by the per-render preview."""
+    try:
+        files = glob.glob(os.path.join(SESSIONS_DIR, "*.json"))
+    except OSError:
+        return None
+    for f in files:
+        try:
+            with open(f, errors="replace") as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if d.get("sessionId") == sid:
+            if _pid_is_claude(d.get("pid")):
+                return {"pid": d.get("pid"), "name": d.get("name"), "status": d.get("status")}
+            return None
+    return None
 
 
 def load_registry():
@@ -231,14 +270,16 @@ def list_mode(show_all=False):
         reg_name = reg.get(sid, {}).get("name")
         label = best_label(info, reg_name)
         reason = exclusion_reason(label, sid, info["prompts"], excluded, patterns)
-        if reason and not show_all:
+        is_open = sid in reg
+        # A pattern match never hides a running session; an explicit ctrl-x id still does.
+        if reason and not show_all and not (is_open and reason == "pattern"):
             continue
         br = ""
         if info["branch"] and info["branch"] not in ("HEAD", "main", "master", ""):
             br = f"  [{info['branch']}]"
         age = human_age(now - mt)
         # status col: ● open beats ✕ excluded (the latter only shows in --all).
-        if sid in reg:
+        if is_open:
             status = "●"
         elif show_all and reason:
             status = "✕"
@@ -256,7 +297,7 @@ def preview_mode(path):
     if not info:
         print("(unreadable transcript)")
         return
-    reg = load_registry().get(info["sid"], {})
+    reg = open_entry_for(info["sid"]) or {}
     label = best_label(info, reg.get("name"))
     print(f"TITLE   {label}")
     print(f"DIR     {short(info['cwd'])}")
@@ -288,6 +329,10 @@ def toggle_exclude(sid):
 
 
 def main():
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     argv = sys.argv
     if len(argv) >= 2 and argv[1] == "--list":
         list_mode(show_all="--all" in argv[2:])
