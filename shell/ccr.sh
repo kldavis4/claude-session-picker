@@ -5,9 +5,10 @@
 #   source /path/to/claude-session-picker/shell/ccr.sh
 #
 # Usage:
-#   ccr                fuzzy-pick an active session and resume it in its cwd
-#   ccr <query>        same, with the picker pre-filtered by <query>
-#   ccr -a | --all     start in "show all" mode (includes excluded sessions)
+#   ccr                  fuzzy-pick an active session and resume it in its cwd
+#   ccr <query>          same, with the picker pre-filtered by <query>
+#   ccr -a | --all       start in "show all" mode (includes excluded sessions)
+#   ccr <query> -- ARGS  pass ARGS straight to `claude --resume` (e.g. --model opus)
 #
 # In the picker:
 #   type        fuzzy-filter across title + directory + branch
@@ -17,6 +18,8 @@
 #
 # Overrides:
 #   CCR_HELPER           path to claude-sessions.py (default: ../bin relative to this file)
+#   CCR_CLAUDE_ARGS      flags appended to every `claude --resume` (e.g.
+#                        export CCR_CLAUDE_ARGS="--dangerously-skip-permissions")
 #   CLAUDE_PROJECTS_DIR  transcript root (default: ~/.claude/projects)
 #   CCR_CONFIG_DIR       exclusion config dir (default: ~/.config/ccr)
 
@@ -43,11 +46,24 @@ ccr() {
     return 1
   fi
 
-  # -a/--all starts in "show everything (incl. excluded)" mode.
-  local all=0
-  case "${1:-}" in
-    -a|--all) all=1; shift ;;
-  esac
+  # Parse args: [-a|--all] [query...] [-- claude-args...]
+  # Everything after a literal `--` is passed straight through to claude.
+  local all=0 sep=0 a
+  local -a query_parts claude_extra
+  for a in "$@"; do
+    if [ "$sep" -eq 1 ]; then claude_extra+=("$a"); continue; fi
+    case "$a" in
+      --)       sep=1 ;;
+      -a|--all) all=1 ;;
+      *)        query_parts+=("$a") ;;
+    esac
+  done
+
+  # Default claude flags from CCR_CLAUDE_ARGS, word-split portably (zsh/bash).
+  local -a envargs
+  if [ -n "${CCR_CLAUDE_ARGS:-}" ]; then
+    if [ -n "${ZSH_VERSION:-}" ]; then envargs=(${=CCR_CLAUDE_ARGS}); else envargs=($CCR_CLAUDE_ARGS); fi
+  fi
 
   local prompt
   local -a feed
@@ -62,7 +78,7 @@ ccr() {
     --delimiter='\t' --with-nth=4 \
     --no-sort --reverse --height=85% \
     --prompt="$prompt" \
-    --query="$*" \
+    --query="${query_parts[*]}" \
     --header='● open   ctrl-x: hide/unhide   ctrl-a: all/active   enter: resume' \
     --preview="python3 \"\$CCR_HELPER\" --preview {3}" \
     --preview-window='down:33%:wrap:border-top' \
@@ -75,5 +91,5 @@ ccr() {
   if [ -d "$cwd" ]; then
     cd "$cwd" || return
   fi
-  claude --resume "$sid"
+  claude --resume "$sid" "${envargs[@]}" "${claude_extra[@]}"
 }

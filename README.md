@@ -79,10 +79,25 @@ If `fzf` is missing:
 ## Usage
 
 ```sh
-ccr                # browse active sessions, newest first
-ccr proxy oz       # open the picker pre-filtered by a query
-ccr -a             # start in show-all mode (includes excluded sessions)
+ccr                      # browse active sessions, newest first
+ccr proxy oz             # open the picker pre-filtered by a query
+ccr -a                   # start in show-all mode (includes excluded sessions)
+ccr foo -- --model opus  # pass args after `--` straight to `claude --resume`
 ```
+
+### Passing flags to `claude`
+
+`ccr` resumes with `claude --resume <id>` plus:
+
+- **`CCR_CLAUDE_ARGS`** — flags applied to *every* resume. Set this in your rc to
+  match how you normally launch Claude Code, e.g.:
+
+  ```sh
+  export CCR_CLAUDE_ARGS="--dangerously-skip-permissions"
+  ```
+
+- **`-- <args>`** — anything after a literal `--` on the `ccr` line is passed
+  through for that one resume (appended after `CCR_CLAUDE_ARGS`).
 
 Inside the picker:
 
