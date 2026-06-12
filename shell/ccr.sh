@@ -65,7 +65,7 @@ ccr() {
     --query="$*" \
     --header='● open   ctrl-x: hide/unhide   ctrl-a: all/active   enter: resume' \
     --preview="python3 \"\$CCR_HELPER\" --preview {3}" \
-    --preview-window='right:52%:wrap' \
+    --preview-window='down:33%:wrap:border-top' \
     --bind="ctrl-x:execute-silent(python3 \"\$CCR_HELPER\" --toggle-exclude {1})+transform:[ \"\$FZF_PROMPT\" = 'all> ' ] && echo 'reload(python3 \"\$CCR_HELPER\" --list --all)' || echo 'reload(python3 \"\$CCR_HELPER\" --list)'" \
     --bind="ctrl-a:transform:[ \"\$FZF_PROMPT\" = 'all> ' ] && echo 'change-prompt(session> )+reload(python3 \"\$CCR_HELPER\" --list)' || echo 'change-prompt(all> )+reload(python3 \"\$CCR_HELPER\" --list --all)'") || return
   [ -z "$sel" ] && return

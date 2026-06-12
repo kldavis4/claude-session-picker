@@ -200,6 +200,13 @@ def short(p):
     return p.replace(HOME, "~", 1) if p.startswith(HOME) else p
 
 
+TITLE_W = 46  # title column width; directory/branch align after it
+
+
+def _truncate(s, w):
+    return s if len(s) <= w else s[:w - 1] + "…"
+
+
 def list_mode(show_all=False):
     now = time.time()
     excluded = load_excluded()
@@ -222,7 +229,7 @@ def list_mode(show_all=False):
             continue
         sid = info["sid"]
         reg_name = reg.get(sid, {}).get("name")
-        label = best_label(info, reg_name)[:90]
+        label = best_label(info, reg_name)
         reason = exclusion_reason(label, sid, info["prompts"], excluded, patterns)
         if reason and not show_all:
             continue
@@ -230,14 +237,16 @@ def list_mode(show_all=False):
         if info["branch"] and info["branch"] not in ("HEAD", "main", "master", ""):
             br = f"  [{info['branch']}]"
         age = human_age(now - mt)
-        # 2-col status prefix: ● open beats ✕ excluded (the latter only in --all).
+        # status col: ● open beats ✕ excluded (the latter only shows in --all).
         if sid in reg:
-            status = "● "
+            status = "●"
         elif show_all and reason:
-            status = "✕ "
+            status = "✕"
         else:
-            status = "  "
-        display = f"{status}{age:>4}  {label}  —  {short(info['cwd'])}{br}"
+            status = " "
+        # Fixed-width columns so directory/branch align across rows.
+        title_col = _truncate(label, TITLE_W).ljust(TITLE_W)
+        display = f"{status}  {age:>4}  {title_col}  {short(info['cwd'])}{br}"
         out.append("\t".join([sid, info["cwd"], p, display]))
     sys.stdout.write("\n".join(out) + ("\n" if out else ""))
 
