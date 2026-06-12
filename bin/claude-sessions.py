@@ -271,8 +271,8 @@ def list_mode(show_all=False):
         label = best_label(info, reg_name)
         reason = exclusion_reason(label, sid, info["prompts"], excluded, patterns)
         is_open = sid in reg
-        # A pattern match never hides a running session; an explicit ctrl-x id still does.
-        if reason and not show_all and not (is_open and reason == "pattern"):
+        # A running session is always shown — exclusions (pattern or id) never hide it.
+        if reason and not show_all and not is_open:
             continue
         br = ""
         if info["branch"] and info["branch"] not in ("HEAD", "main", "master", ""):

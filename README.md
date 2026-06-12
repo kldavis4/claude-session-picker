@@ -116,6 +116,9 @@ Two ways to hide them, both stored under `~/.config/ccr/`:
 
 Hidden sessions are never deleted — `ccr -a` or Ctrl-A always brings them back.
 
+A **currently-running** session (`●`) is always shown, even if it matches an
+exclude rule — so you can never lose track of a session you have open.
+
 ## Open sessions and live titles
 
 Claude Code keeps a per-session registry at `~/.claude/sessions/<pid>.json`
