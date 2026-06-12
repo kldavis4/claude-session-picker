@@ -31,6 +31,7 @@ import sys
 import json
 import glob
 import time
+import subprocess
 
 ROOT = os.environ.get("CLAUDE_PROJECTS_DIR") or os.path.expanduser("~/.claude/projects")
 HOME = os.path.expanduser("~")
@@ -39,6 +40,7 @@ CONFIG_DIR = (os.environ.get("CCR_CONFIG_DIR")
               or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "ccr"))
 EXCLUDED_FILE = os.path.join(CONFIG_DIR, "excluded")
 PATTERNS_FILE = os.path.join(CONFIG_DIR, "exclude-patterns")
+ACTIVE_DIR = os.path.join(CONFIG_DIR, "active")
 
 
 def _read_lines(path):
@@ -117,6 +119,51 @@ def scan(path, max_prompts=4):
             "branch": branch or "", "prompts": prompts}
 
 
+def _live_claude_pids():
+    """PIDs of all running `claude` processes (one ps call)."""
+    try:
+        r = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True)
+    except Exception:
+        return set()
+    pids = set()
+    for line in r.stdout.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and "claude" in parts[1]:
+            try:
+                pids.add(int(parts[0]))
+            except ValueError:
+                pass
+    return pids
+
+
+def load_open_sids():
+    """Session ids whose registered PID is still a live claude process.
+
+    Records are written by the SessionStart hook (bin/ccr-session-hook.py).
+    Stale records (dead PID) are pruned so the registry is self-healing even
+    when SessionEnd didn't fire (crash/kill)."""
+    try:
+        entries = os.listdir(ACTIVE_DIR)
+    except OSError:
+        return set()
+    live = _live_claude_pids()
+    open_sids = set()
+    for sid in entries:
+        p = os.path.join(ACTIVE_DIR, sid)
+        try:
+            pid = int((open(p).read().strip() or "0"))
+        except (OSError, ValueError):
+            pid = 0
+        if pid and pid in live:
+            open_sids.add(sid)
+        else:
+            try:
+                os.remove(p)  # prune dead record
+            except OSError:
+                pass
+    return open_sids
+
+
 def exclusion_reason(info, excluded, patterns):
     """Return 'id', 'pattern', or None for why a session is hidden by default."""
     if info["sid"] in excluded:
@@ -146,6 +193,7 @@ def list_mode(show_all=False):
     now = time.time()
     excluded = load_excluded()
     patterns = load_patterns()
+    open_sids = load_open_sids()
 
     rows = []
     for p in glob.glob(os.path.join(ROOT, "*", "*.jsonl")):
@@ -170,9 +218,14 @@ def list_mode(show_all=False):
         if info["branch"] and info["branch"] not in ("HEAD", "main", "master", ""):
             br = f"  [{info['branch']}]"
         age = human_age(now - mt)
-        # In --all view, prefix hidden rows so they're visible and un-hideable.
-        mark = ("✕ " if reason else "  ") if show_all else ""
-        display = f"{mark}{age:>4}  {label}  —  {short(info['cwd'])}{br}"
+        # 2-col status prefix: ● open beats ✕ excluded (the latter only in --all).
+        if info["sid"] in open_sids:
+            status = "● "
+        elif show_all and reason:
+            status = "✕ "
+        else:
+            status = "  "
+        display = f"{status}{age:>4}  {label}  —  {short(info['cwd'])}{br}"
         out.append("\t".join([info["sid"], info["cwd"], p, display]))
     sys.stdout.write("\n".join(out) + ("\n" if out else ""))
 
@@ -183,10 +236,13 @@ def preview_mode(path):
         print("(unreadable transcript)")
         return
     reason = exclusion_reason(info, load_excluded(), load_patterns())
+    is_open = info["sid"] in load_open_sids()
     print(f"TITLE   {info['title'] or '(none)'}")
     print(f"DIR     {short(info['cwd'])}")
     if info["branch"] and info["branch"] != "HEAD":
         print(f"BRANCH  {info['branch']}")
+    if is_open:
+        print("OPEN    ● yes — this session is running now")
     if reason == "id":
         print("EXCLUDED  yes (this session — ctrl-x to un-hide)")
     elif reason == "pattern":

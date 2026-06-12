@@ -63,7 +63,7 @@ ccr() {
     --no-sort --reverse --height=85% \
     --prompt="$prompt" \
     --query="$*" \
-    --header='ctrl-x: hide/unhide   ctrl-a: all/active   enter: resume' \
+    --header='● open   ctrl-x: hide/unhide   ctrl-a: all/active   enter: resume' \
     --preview="python3 \"\$CCR_HELPER\" --preview {3}" \
     --preview-window='right:52%:wrap' \
     --bind="ctrl-x:execute-silent(python3 \"\$CCR_HELPER\" --toggle-exclude {1})+transform:[ \"\$FZF_PROMPT\" = 'all> ' ] && echo 'reload(python3 \"\$CCR_HELPER\" --list --all)' || echo 'reload(python3 \"\$CCR_HELPER\" --list)'" \
