@@ -105,10 +105,25 @@ Inside the picker:
 - **↑/↓** to move; the right pane previews the session's opening prompts.
 - **Enter** to resume — `ccr` `cd`s into the session's original directory and
   runs `claude --resume <id>`.
+- **Space** to toggle the highlighted session as a **favorite** (`★`).
 - **Ctrl-X** to hide the highlighted session (toggles — press again to un-hide).
 - **Ctrl-A** to toggle between the active view and show-all (hidden sessions
   appear marked with `✕`).
 - **Esc** to cancel.
+
+> Because **Space** toggles favorites, it can't be typed in the search box (fzf
+> would treat it as a term separator). Single-term substring filtering still
+> works.
+
+## Favorites
+
+Sessions you keep coming back to can be pinned. Press **Space** on a row to
+toggle it as a favorite (stored in `~/.config/ccr/favorites`). Favorites:
+
+- are marked with a leading `★`,
+- **sort to the top** of the list, ordered by last activity among themselves,
+- with all non-favorites below, also newest-first,
+- and are always shown (a favorite is never hidden by an exclude rule).
 
 ## Excluding noisy sessions
 

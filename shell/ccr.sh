@@ -11,10 +11,15 @@
 #   ccr <query> -- ARGS  pass ARGS straight to `claude --resume` (e.g. --model opus)
 #
 # In the picker:
-#   type        fuzzy-filter across title + directory + branch
+#   type        fuzzy-filter across title + directory + branch (no spaces — see below)
+#   space       toggle favorite (★) — favorites sort to the top by last activity
 #   ctrl-x      toggle exclude on the highlighted session (hide / un-hide)
 #   ctrl-a      toggle between active view and show-all (excluded marked ✕)
 #   enter       resume the session in its original directory
+#
+# Note: space is bound to favorite, so it can't be typed in the search query
+# (fzf would otherwise treat it as a term separator). Single-term substrings
+# still match fine.
 #
 # Overrides:
 #   CCR_HELPER           path to claude-sessions.py (default: ../bin relative to this file)
@@ -79,11 +84,12 @@ ccr() {
     --no-sort --reverse --height=85% \
     --prompt="$prompt" \
     --query="${query_parts[*]}" \
-    --header='● open   ctrl-x: hide/unhide   ctrl-a: all/active   enter: resume' \
+    --header='space ★fav · ctrl-x hide · ctrl-a all · enter resume   (★ favorite, ● open)' \
     --preview="python3 \"\$CCR_HELPER\" --preview {3}" \
     --preview-window='down:33%:wrap:border-top' \
     --bind="ctrl-x:execute-silent(python3 \"\$CCR_HELPER\" --toggle-exclude {1})+transform:[ \"\$FZF_PROMPT\" = 'all> ' ] && echo 'reload(python3 \"\$CCR_HELPER\" --list --all)' || echo 'reload(python3 \"\$CCR_HELPER\" --list)'" \
-    --bind="ctrl-a:transform:[ \"\$FZF_PROMPT\" = 'all> ' ] && echo 'change-prompt(session> )+reload(python3 \"\$CCR_HELPER\" --list)' || echo 'change-prompt(all> )+reload(python3 \"\$CCR_HELPER\" --list --all)'") || return
+    --bind="ctrl-a:transform:[ \"\$FZF_PROMPT\" = 'all> ' ] && echo 'change-prompt(session> )+reload(python3 \"\$CCR_HELPER\" --list)' || echo 'change-prompt(all> )+reload(python3 \"\$CCR_HELPER\" --list --all)'" \
+    --bind="space:execute-silent(python3 \"\$CCR_HELPER\" --toggle-favorite {1})+transform:[ \"\$FZF_PROMPT\" = 'all> ' ] && echo 'reload(python3 \"\$CCR_HELPER\" --list --all)' || echo 'reload(python3 \"\$CCR_HELPER\" --list)'") || return
   [ -z "$sel" ] && return
 
   sid=$(printf '%s' "$sel" | cut -f1)

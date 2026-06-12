@@ -28,6 +28,9 @@ Modes:
   --preview <path>   human-readable summary of one transcript.
   --toggle-exclude <sessionId>
                      add the id to `excluded`, or remove it if already present.
+  --toggle-favorite <sessionId>
+                     add/remove the id in `favorites`. Favorites (★) sort to the
+                     top of the list, ordered by last activity, then the rest.
 """
 import os
 import sys
@@ -45,6 +48,7 @@ CONFIG_DIR = (os.environ.get("CCR_CONFIG_DIR")
               or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "ccr"))
 EXCLUDED_FILE = os.path.join(CONFIG_DIR, "excluded")
 PATTERNS_FILE = os.path.join(CONFIG_DIR, "exclude-patterns")
+FAVORITES_FILE = os.path.join(CONFIG_DIR, "favorites")
 
 
 def _read_lines(path):
@@ -65,6 +69,10 @@ def load_excluded():
 
 def load_patterns():
     return [s.lower() for s in _read_lines(PATTERNS_FILE)]
+
+
+def load_favorites():
+    return set(_read_lines(FAVORITES_FILE))
 
 
 def _cmd_is_claude(cmd):
@@ -250,18 +258,15 @@ def list_mode(show_all=False):
     now = time.time()
     excluded = load_excluded()
     patterns = load_patterns()
+    favorites = load_favorites()
     reg = load_registry()
 
-    rows = []
+    entries = []  # (is_fav, mtime, tab_line)
     for p in glob.glob(os.path.join(ROOT, "*", "*.jsonl")):
         try:
-            rows.append((os.path.getmtime(p), p))
+            mt = os.path.getmtime(p)
         except OSError:
             continue
-    rows.sort(reverse=True)
-
-    out = []
-    for mt, p in rows:
         info = scan(p, max_prompts=1)
         # Skip unreadable transcripts and sessions with no real user turn.
         if not info or (info["cwd"] == "?" and not info["prompts"]):
@@ -271,25 +276,29 @@ def list_mode(show_all=False):
         label = best_label(info, reg_name)
         reason = exclusion_reason(label, sid, info["prompts"], excluded, patterns)
         is_open = sid in reg
-        # A running session is always shown — exclusions (pattern or id) never hide it.
-        if reason and not show_all and not is_open:
+        is_fav = sid in favorites
+        # Running sessions and favorites are always shown; exclusions never hide them.
+        if reason and not show_all and not is_open and not is_fav:
             continue
         br = ""
         if info["branch"] and info["branch"] not in ("HEAD", "main", "master", ""):
             br = f"  [{info['branch']}]"
         age = human_age(now - mt)
-        # status col: ● open beats ✕ excluded (the latter only shows in --all).
+        # Two status cols: favorite ★, then open ●/excluded ✕ (✕ only in --all).
+        fav = "★" if is_fav else " "
         if is_open:
-            status = "●"
+            st = "●"
         elif show_all and reason:
-            status = "✕"
+            st = "✕"
         else:
-            status = " "
-        # Fixed-width columns so directory/branch align across rows.
+            st = " "
         title_col = _truncate(label, TITLE_W).ljust(TITLE_W)
-        display = f"{status}  {age:>4}  {title_col}  {short(info['cwd'])}{br}"
-        out.append("\t".join([sid, info["cwd"], p, display]))
-    sys.stdout.write("\n".join(out) + ("\n" if out else ""))
+        display = f"{fav}{st}  {age:>4}  {title_col}  {short(info['cwd'])}{br}"
+        entries.append((is_fav, mt, "\t".join([sid, info["cwd"], p, display])))
+
+    # Favorites first (newest activity first), then the rest (newest first).
+    entries.sort(key=lambda e: (not e[0], -e[1]))
+    sys.stdout.write("\n".join(e[2] for e in entries) + ("\n" if entries else ""))
 
 
 def preview_mode(path):
@@ -303,6 +312,8 @@ def preview_mode(path):
     print(f"DIR     {short(info['cwd'])}")
     if info["branch"] and info["branch"] != "HEAD":
         print(f"BRANCH  {info['branch']}")
+    if info["sid"] in load_favorites():
+        print("FAVORITE ★ yes")
     if reg:
         st = reg.get("status")
         print(f"OPEN    ● running now{(' (' + st + ')') if st else ''}")
@@ -317,15 +328,20 @@ def preview_mode(path):
         print()
 
 
-def toggle_exclude(sid):
+def _toggle_in(path, loader, sid):
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    cur = load_excluded()
-    if sid in cur:
-        cur.discard(sid)
-    else:
-        cur.add(sid)
-    with open(EXCLUDED_FILE, "w") as fh:
+    cur = loader()
+    cur.discard(sid) if sid in cur else cur.add(sid)
+    with open(path, "w") as fh:
         fh.write("\n".join(sorted(cur)) + ("\n" if cur else ""))
+
+
+def toggle_exclude(sid):
+    _toggle_in(EXCLUDED_FILE, load_excluded, sid)
+
+
+def toggle_favorite(sid):
+    _toggle_in(FAVORITES_FILE, load_favorites, sid)
 
 
 def main():
@@ -340,12 +356,24 @@ def main():
         preview_mode(argv[2])
     elif len(argv) >= 3 and argv[1] == "--toggle-exclude":
         toggle_exclude(argv[2])
+    elif len(argv) >= 3 and argv[1] == "--toggle-favorite":
+        toggle_favorite(argv[2])
     else:
         sys.stderr.write(
             "usage: claude-sessions.py --list [--all] | --preview <transcript> "
-            "| --toggle-exclude <sessionId>\n")
+            "| --toggle-exclude <sessionId> | --toggle-favorite <sessionId>\n")
         sys.exit(2)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BrokenPipeError:
+        # Reader (fzf/head) closed the pipe early — exit quietly, no traceback.
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except OSError:
+            pass
+        sys.exit(0)
+    except KeyboardInterrupt:
+        sys.exit(130)
