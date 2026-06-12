@@ -116,45 +116,31 @@ Two ways to hide them, both stored under `~/.config/ccr/`:
 
 Hidden sessions are never deleted — `ccr -a` or Ctrl-A always brings them back.
 
-## Knowing which sessions are open
+## Open sessions and live titles
 
-`ccr` can mark sessions that are **currently running** with a `●`, so you don't
-resume one you already have open in another terminal. This is opt-in because it
-needs two Claude Code hooks:
+Claude Code keeps a per-session registry at `~/.claude/sessions/<pid>.json`
+(session id, pid, status, and the `/rename` name). `ccr` reads it — no setup,
+no hooks — to give you two things:
 
-```sh
-./install-hooks.sh        # merges SessionStart/SessionEnd hooks into ~/.claude/settings.json
-```
+- **`●` open marker** on sessions that are running right now, so you don't
+  resume one you already have open in another terminal. A session counts as open
+  only if its registered PID is still a live `claude` process, so crashes never
+  leave a stale "open" mark.
+- **Live `/rename` titles.** When you `/rename` a *running* session, the new
+  name is written to this registry, not to the transcript — so `ccr` shows the
+  rename immediately. (The transcript only carries the auto-generated `aiTitle`,
+  which is what `ccr` falls back to for sessions that aren't running.)
 
-The installer is idempotent and leaves your other hooks untouched (override the
-target with `CLAUDE_SETTINGS=/path/to/settings.json`).
-
-How it works:
-
-- On **SessionStart** (new or resumed), the hook records the owning `claude`
-  process PID under `~/.config/ccr/active/<session-id>`.
-- A session is shown as open only if that **PID is still a live `claude`
-  process** — so a crash or `kill` that skips `SessionEnd` can't leave a session
-  falsely marked open. `ccr` prunes dead records as it lists.
-- **SessionEnd** removes the record on a clean exit (best-effort cleanup).
-
-Notes:
-
-- Only sessions that **start or resume after** installing the hooks are tracked
-  — already-running sessions register the next time they launch.
-- There is no first-class "is this session open" flag in Claude Code; the
-  transcript isn't held open and the session id isn't in the process
-  environment, so this hook-based registry is the reliable way to know.
+Title precedence in the list: **live `/rename` name → transcript `aiTitle` →
+first prompt**.
 
 ## How it works
 
 | Piece                    | Role                                                             |
 | ------------------------ | --------------------------------------------------------------- |
-| `bin/claude-sessions.py` | Scans `~/.claude/projects/*/*.jsonl`, extracts title/cwd/branch. |
+| `bin/claude-sessions.py` | Scans `~/.claude/projects/*/*.jsonl` (titles/cwd/branch) and `~/.claude/sessions/*.json` (open state + live names). |
 | `shell/ccr.sh`           | Defines the `ccr` function; pipes the list through `fzf`.        |
 | `install.sh`             | Wires `ccr.sh` into your shell rc.                               |
-| `bin/ccr-session-hook.py`| SessionStart/SessionEnd hook that records open sessions (optional). |
-| `install-hooks.sh`       | Merges the open-session hooks into `~/.claude/settings.json`.    |
 
 The helper does a single cheap pass per transcript (string-gated `json.loads`),
 so listing hundreds of sessions takes ~2s.
@@ -167,7 +153,8 @@ Both are optional environment variables:
 | --------------------- | ---------------------- | -------------------------------------------- |
 | `CLAUDE_PROJECTS_DIR` | `~/.claude/projects`   | Where transcripts live (override for tests). |
 | `CCR_HELPER`          | `<repo>/bin/...py`     | Path to the helper if you relocate it.       |
-| `CCR_CONFIG_DIR`      | `~/.config/ccr`        | Exclusion files (`excluded`, `exclude-patterns`) and the `active/` open-session registry; honors `XDG_CONFIG_HOME`. |
+| `CCR_CONFIG_DIR`      | `~/.config/ccr`        | Exclusion files (`excluded`, `exclude-patterns`); honors `XDG_CONFIG_HOME`. |
+| `CLAUDE_CONFIG_DIR`   | `~/.claude`            | Claude dir holding `projects/` and `sessions/`.        |
 
 ## Uninstall
 

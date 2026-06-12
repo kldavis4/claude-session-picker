@@ -5,24 +5,27 @@ Reads Claude Code transcripts (one JSONL file per session) and emits either a
 flat, searchable list of every session across every project, or a rich preview
 of a single session. Designed to be driven by fzf via the `ccr` shell function.
 
-Transcript location defaults to ~/.claude/projects but can be overridden with
-the CLAUDE_PROJECTS_DIR environment variable (useful for tests or non-standard
-installs).
+Two live signals come from Claude Code's own per-session registry at
+~/.claude/sessions/<pid>.json (sessionId, pid, status, and `name` set by
+`/rename`):
+  - the picker marks sessions that are currently running with ●
+  - it shows the live `/rename` title, which is NOT written to the transcript
+    while the session is open (the transcript only carries the auto `aiTitle`)
 
-Exclusions (so the list stays signal, not noise) live under the config dir
-(~/.config/ccr, or $CCR_CONFIG_DIR / $XDG_CONFIG_HOME):
+Transcript location defaults to ~/.claude/projects (override: CLAUDE_PROJECTS_DIR).
+Claude dir defaults to ~/.claude (override: CLAUDE_CONFIG_DIR).
+
+Exclusions live under the config dir (~/.config/ccr, or $CCR_CONFIG_DIR /
+$XDG_CONFIG_HOME):
   excluded           tool-managed list of session IDs hidden via `ctrl-x`
-  exclude-patterns   user-editable list of case-insensitive substrings; any
-                     session whose title or first prompt contains one is hidden
-A session is hidden by default if its id is in `excluded` OR it matches a
-pattern. `--all` shows everything, marking hidden rows with a leading ✕.
+  exclude-patterns   user-editable case-insensitive substrings; any session
+                     whose title or first prompt contains one is hidden
+`--all` shows everything, marking hidden rows with a leading ✕.
 
 Modes:
   --list [--all]     one row per transcript (newest first), tab-separated:
                        sessionId \\t cwd \\t transcript_path \\t display_string
-                     Only field 4 (display) is meant to be shown/searched in
-                     fzf; fields 1-3 are machine-readable payload.
-  --preview <path>   print a human-readable summary of one transcript.
+  --preview <path>   human-readable summary of one transcript.
   --toggle-exclude <sessionId>
                      add the id to `excluded`, or remove it if already present.
 """
@@ -33,14 +36,15 @@ import glob
 import time
 import subprocess
 
-ROOT = os.environ.get("CLAUDE_PROJECTS_DIR") or os.path.expanduser("~/.claude/projects")
+CLAUDE_DIR = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+ROOT = os.environ.get("CLAUDE_PROJECTS_DIR") or os.path.join(CLAUDE_DIR, "projects")
+SESSIONS_DIR = os.path.join(CLAUDE_DIR, "sessions")
 HOME = os.path.expanduser("~")
 
 CONFIG_DIR = (os.environ.get("CCR_CONFIG_DIR")
               or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "ccr"))
 EXCLUDED_FILE = os.path.join(CONFIG_DIR, "excluded")
 PATTERNS_FILE = os.path.join(CONFIG_DIR, "exclude-patterns")
-ACTIVE_DIR = os.path.join(CONFIG_DIR, "active")
 
 
 def _read_lines(path):
@@ -61,6 +65,52 @@ def load_excluded():
 
 def load_patterns():
     return [s.lower() for s in _read_lines(PATTERNS_FILE)]
+
+
+def _live_claude_pids():
+    """PIDs of all running `claude` processes (one ps call)."""
+    try:
+        r = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True)
+    except Exception:
+        return set()
+    pids = set()
+    for line in r.stdout.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and "claude" in parts[1]:
+            try:
+                pids.add(int(parts[0]))
+            except ValueError:
+                pass
+    return pids
+
+
+def load_registry():
+    """Claude Code's live session registry: sessionId -> {pid, name, status}.
+
+    Only entries whose PID is a live `claude` process are kept, so a stale file
+    left by a crash never reports a closed session as open. The `name` is the
+    /rename title, authoritative for a running session (the transcript's
+    aiTitle is the auto-generated one and isn't updated by /rename)."""
+    reg = {}
+    try:
+        files = glob.glob(os.path.join(SESSIONS_DIR, "*.json"))
+    except OSError:
+        return reg
+    if not files:
+        return reg
+    live = _live_claude_pids()
+    for f in files:
+        try:
+            with open(f, errors="replace") as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        sid = d.get("sessionId")
+        pid = d.get("pid")
+        if not sid or pid not in live:
+            continue
+        reg[sid] = {"pid": pid, "name": d.get("name"), "status": d.get("status")}
+    return reg
 
 
 def _text_from_user(d):
@@ -119,57 +169,18 @@ def scan(path, max_prompts=4):
             "branch": branch or "", "prompts": prompts}
 
 
-def _live_claude_pids():
-    """PIDs of all running `claude` processes (one ps call)."""
-    try:
-        r = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True)
-    except Exception:
-        return set()
-    pids = set()
-    for line in r.stdout.splitlines():
-        parts = line.split(None, 1)
-        if len(parts) == 2 and "claude" in parts[1]:
-            try:
-                pids.add(int(parts[0]))
-            except ValueError:
-                pass
-    return pids
+def best_label(info, reg_name):
+    """Title precedence: live /rename name > transcript aiTitle > first prompt."""
+    return (reg_name or info["title"]
+            or (info["prompts"][0] if info["prompts"] else "(empty session)"))
 
 
-def load_open_sids():
-    """Session ids whose registered PID is still a live claude process.
-
-    Records are written by the SessionStart hook (bin/ccr-session-hook.py).
-    Stale records (dead PID) are pruned so the registry is self-healing even
-    when SessionEnd didn't fire (crash/kill)."""
-    try:
-        entries = os.listdir(ACTIVE_DIR)
-    except OSError:
-        return set()
-    live = _live_claude_pids()
-    open_sids = set()
-    for sid in entries:
-        p = os.path.join(ACTIVE_DIR, sid)
-        try:
-            pid = int((open(p).read().strip() or "0"))
-        except (OSError, ValueError):
-            pid = 0
-        if pid and pid in live:
-            open_sids.add(sid)
-        else:
-            try:
-                os.remove(p)  # prune dead record
-            except OSError:
-                pass
-    return open_sids
-
-
-def exclusion_reason(info, excluded, patterns):
+def exclusion_reason(label, sid, prompts, excluded, patterns):
     """Return 'id', 'pattern', or None for why a session is hidden by default."""
-    if info["sid"] in excluded:
+    if sid in excluded:
         return "id"
     if patterns:
-        hay = ((info["title"] or "") + " " + " ".join(info["prompts"])).lower()
+        hay = (label + " " + " ".join(prompts)).lower()
         for p in patterns:
             if p in hay:
                 return "pattern"
@@ -193,7 +204,7 @@ def list_mode(show_all=False):
     now = time.time()
     excluded = load_excluded()
     patterns = load_patterns()
-    open_sids = load_open_sids()
+    reg = load_registry()
 
     rows = []
     for p in glob.glob(os.path.join(ROOT, "*", "*.jsonl")):
@@ -209,24 +220,25 @@ def list_mode(show_all=False):
         # Skip unreadable transcripts and sessions with no real user turn.
         if not info or (info["cwd"] == "?" and not info["prompts"]):
             continue
-        reason = exclusion_reason(info, excluded, patterns)
+        sid = info["sid"]
+        reg_name = reg.get(sid, {}).get("name")
+        label = best_label(info, reg_name)[:90]
+        reason = exclusion_reason(label, sid, info["prompts"], excluded, patterns)
         if reason and not show_all:
             continue
-        label = info["title"] or (info["prompts"][0] if info["prompts"] else "(empty session)")
-        label = label[:90]
         br = ""
         if info["branch"] and info["branch"] not in ("HEAD", "main", "master", ""):
             br = f"  [{info['branch']}]"
         age = human_age(now - mt)
         # 2-col status prefix: ● open beats ✕ excluded (the latter only in --all).
-        if info["sid"] in open_sids:
+        if sid in reg:
             status = "● "
         elif show_all and reason:
             status = "✕ "
         else:
             status = "  "
         display = f"{status}{age:>4}  {label}  —  {short(info['cwd'])}{br}"
-        out.append("\t".join([info["sid"], info["cwd"], p, display]))
+        out.append("\t".join([sid, info["cwd"], p, display]))
     sys.stdout.write("\n".join(out) + ("\n" if out else ""))
 
 
@@ -235,18 +247,17 @@ def preview_mode(path):
     if not info:
         print("(unreadable transcript)")
         return
-    reason = exclusion_reason(info, load_excluded(), load_patterns())
-    is_open = info["sid"] in load_open_sids()
-    print(f"TITLE   {info['title'] or '(none)'}")
+    reg = load_registry().get(info["sid"], {})
+    label = best_label(info, reg.get("name"))
+    print(f"TITLE   {label}")
     print(f"DIR     {short(info['cwd'])}")
     if info["branch"] and info["branch"] != "HEAD":
         print(f"BRANCH  {info['branch']}")
-    if is_open:
-        print("OPEN    ● yes — this session is running now")
-    if reason == "id":
-        print("EXCLUDED  yes (this session — ctrl-x to un-hide)")
-    elif reason == "pattern":
-        print("EXCLUDED  yes (matches an exclude-pattern)")
+    if reg:
+        st = reg.get("status")
+        print(f"OPEN    ● running now{(' (' + st + ')') if st else ''}")
+    if info["sid"] in load_excluded():
+        print("EXCLUDED  yes (ctrl-x to un-hide)")
     print()
     if not info["prompts"]:
         print("(no user prompts)")
